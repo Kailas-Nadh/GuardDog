@@ -1,59 +1,65 @@
 import numpy as np
 import cv2
-from playsound import playsound
- 
-# initialize the HOG descriptor/person detector
+import picamera
+import picamera.array
+import pygame
+import time
+
+# Initialize pygame mixer
+pygame.mixer.init()
+alarm_sound = pygame.mixer.Sound('alarmsound.wav')
+
+# Initialize the HOG descriptor/person detector
 hog = cv2.HOGDescriptor()
 hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
-cv2.startWindowThread()
+# Initialize the camera and video stream
+camera = picamera.PiCamera(resolution=(640, 480), framerate=15)
+camera.start_preview()
 
-# open webcam video stream
-cap = cv2.VideoCapture(0)
+# Allow the camera to warm up
+time.sleep(2)
 
-# the output will be written to output.avi
-# Needed if it is to be used for surveillance
+# Video writer initialization
 out = cv2.VideoWriter(
     'output.avi',
     cv2.VideoWriter_fourcc(*'MJPG'),
     15.,
-    (640,480))
+    (640, 480))
 
-while(True):
-    # Capture frame-by-frame
-    ret, frame = cap.read()
+try:
+    with picamera.array.PiRGBArray(camera) as stream:
+        for frame in camera.capture_continuous(stream, format='bgr', use_video_port=True):
+            # Capture frame-by-frame
+            image = frame.array
 
-    # resizing for faster detection
-    frame = cv2.resize(frame, (640, 480))
-    # using a greyscale picture, also for faster detection
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            # Detect people in the image
+            boxes, weights = hog.detectMultiScale(image, winStride=(8,8))
 
-    # detect people in the image
-    # returns the bounding boxes for the detected objects
-    boxes, weights = hog.detectMultiScale(frame, winStride=(8,8) )
+            # Draw bounding boxes on the image
+            for (xA, yA, xB, yB) in boxes:
+                cv2.rectangle(image, (xA, yA), (xB, yB), (0, 255, 0), 2)
 
-    boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
-    
-    if len(boxes) > 0:
-        # Play sound if at least one human is detected
-        playsound('alarmsound.mp3')
+            # Check if any people are detected and play sound if so
+            if len(boxes) > 0:
+                alarm_sound.play()
 
-    for (xA, yA, xB, yB) in boxes:
-        # display the detected boxes in the colour picture
-        cv2.rectangle(frame, (xA, yA), (xB, yB),
-                          (0, 255, 0), 2)
-    
-    # Write the output video 
-    out.write(frame.astype('uint8'))
-    # Display the resulting frame
-    cv2.imshow('frame',frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+            # Write the frame to the output file
+            out.write(image)
 
-# When everything done, release the capture
-cap.release()
-# and release the output
-out.release()
-# finally, close the window
-cv2.destroyAllWindows()
-cv2.waitKey(1)
+            # Display the resulting frame
+            cv2.imshow('frame', image)
+
+            # Clear the stream for the next frame
+            stream.seek(0)
+            stream.truncate()
+
+            # Exit loop if 'q' is pressed
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+finally:
+    # Release resources
+    camera.stop_preview()
+    out.release()
+    cv2.destroyAllWindows()
+
